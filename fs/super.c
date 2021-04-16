@@ -218,6 +218,7 @@ int sys_mount(char * dev_name, char * dir_name, int rw_flag)
 
 	if (!(dev_i=namei(dev_name)))
 		return -ENOENT;
+	//only block and char device can be mounted.
 	dev = dev_i->i_zone[0];
 	if (!S_ISBLK(dev_i->i_mode)) {
 		iput(dev_i);

@@ -17,7 +17,9 @@
 #include <errno.h>
 #include <const.h>
 #include <sys/stat.h>
-
+/* \004 => 100 => read */
+/* \002 => 010 => write */
+/* \006 => 110 => read and write */
 #define ACC_MODE(x) ("\004\002\006\377"[(x)&O_ACCMODE])
 
 /*
@@ -329,13 +331,17 @@ struct m_inode * namei(const char * pathname)
 
 	if (!(dir = dir_namei(pathname,&namelen,&basename)))
 		return NULL;
+	//handle case: /aaa/bbb/
 	if (!namelen)			/* special case: '/usr/' etc */
 		return dir;
+	//rest handle case: /aaa/bbb
 	bh = find_entry(&dir,basename,namelen,&de);
 	if (!bh) {
 		iput(dir);
 		return NULL;
 	}
+	//"de" is directory entry for the inode you looking for.
+	//get info find inode.
 	inr = de->inode;
 	dev = dir->i_dev;
 	brelse(bh);
@@ -353,6 +359,7 @@ struct m_inode * namei(const char * pathname)
  *
  * namei for open - this is in fact almost the whole open-routine.
  */
+//provide inode creation
 int open_namei(const char * pathname, int flag, int mode,
 	struct m_inode ** res_inode)
 {
@@ -377,6 +384,7 @@ int open_namei(const char * pathname, int flag, int mode,
 		return -EISDIR;
 	}
 	bh = find_entry(&dir,basename,namelen,&de);
+	//there is no "bh" => failure || inode haven't created.
 	if (!bh) {
 		if (!(flag & O_CREAT)) {
 			iput(dir);
@@ -386,6 +394,8 @@ int open_namei(const char * pathname, int flag, int mode,
 			iput(dir);
 			return -EACCES;
 		}
+		//do creation.
+		//inherit parent directory's dev number.
 		inode = new_inode(dir->i_dev);
 		if (!inode) {
 			iput(dir);
@@ -408,14 +418,19 @@ int open_namei(const char * pathname, int flag, int mode,
 		*res_inode = inode;
 		return 0;
 	}
+
 	inr = de->inode;
 	dev = dir->i_dev;
 	brelse(bh);
 	iput(dir);
+	/* O_EXCL is ued to make sure the inode you looking for isn't existed */
+	/* only make sense when use with O_CREATE */
 	if (flag & O_EXCL)
 		return -EEXIST;
+
 	if (!(inode=iget(dev,inr)))
 		return -EACCES;
+	//folder has to read only?
 	if ((S_ISDIR(inode->i_mode) && (flag & O_ACCMODE)) ||
 	    !permission(inode,ACC_MODE(flag))) {
 		iput(inode);
@@ -428,6 +443,8 @@ int open_namei(const char * pathname, int flag, int mode,
 	return 0;
 }
 
+//how i_zone[0] used in different way.
+//create an inode other then folder.
 int sys_mknod(const char * filename, int mode, int dev)
 {
 	const char * basename;
@@ -436,19 +453,23 @@ int sys_mknod(const char * filename, int mode, int dev)
 	struct buffer_head * bh;
 	struct dir_entry * de;
 
+	//only super user can do this function.
 	if (!suser())
 		return -EPERM;
+	//can not accept filename like "/aa/bb/", only "/aa/bb"
 	if (!(dir = dir_namei(filename,&namelen,&basename)))
 		return -ENOENT;
 	if (!namelen) {
 		iput(dir);
 		return -ENOENT;
 	}
+	//should have write permission in the directory.
 	if (!permission(dir,MAY_WRITE)) {
 		iput(dir);
 		return -EPERM;
 	}
 	bh = find_entry(&dir,basename,namelen,&de);
+	//we can not create if inode already existing.
 	if (bh) {
 		brelse(bh);
 		iput(dir);
@@ -460,10 +481,12 @@ int sys_mknod(const char * filename, int mode, int dev)
 		return -ENOSPC;
 	}
 	inode->i_mode = mode;
+	//check if it is block or char device.
 	if (S_ISBLK(mode) || S_ISCHR(mode))
 		inode->i_zone[0] = dev;
 	inode->i_mtime = inode->i_atime = CURRENT_TIME;
 	inode->i_dirt = 1;
+	//add inode to folder.
 	bh = add_entry(dir,basename,namelen,&de);
 	if (!bh) {
 		iput(dir);
@@ -487,6 +510,7 @@ int sys_mkdir(const char * pathname, int mode)
 	struct buffer_head * bh, *dir_block;
 	struct dir_entry * de;
 
+	//before linux-0.95, only root can create a folder.
 	if (!suser())
 		return -EPERM;
 	if (!(dir = dir_namei(pathname,&namelen,&basename)))
@@ -510,9 +534,11 @@ int sys_mkdir(const char * pathname, int mode)
 		iput(dir);
 		return -ENOSPC;
 	}
+	//the initial size for folder is 32
 	inode->i_size = 32;
 	inode->i_dirt = 1;
 	inode->i_mtime = inode->i_atime = CURRENT_TIME;
+	//create block to store inode entries.
 	if (!(inode->i_zone[0]=new_block(inode->i_dev))) {
 		iput(dir);
 		inode->i_nlinks--;
@@ -520,6 +546,7 @@ int sys_mkdir(const char * pathname, int mode)
 		return -ENOSPC;
 	}
 	inode->i_dirt = 1;
+	//read the block.
 	if (!(dir_block=bread(inode->i_dev,inode->i_zone[0]))) {
 		iput(dir);
 		free_block(inode->i_dev,inode->i_zone[0]);
@@ -529,6 +556,7 @@ int sys_mkdir(const char * pathname, int mode)
 	}
 	de = (struct dir_entry *) dir_block->b_data;
 	de->inode=inode->i_num;
+	//add default entries (. and ..) for the folder.
 	strcpy(de->name,".");
 	de++;
 	de->inode = dir->i_num;
@@ -538,6 +566,7 @@ int sys_mkdir(const char * pathname, int mode)
 	brelse(dir_block);
 	inode->i_mode = I_DIRECTORY | (mode & 0777 & ~current->umask);
 	inode->i_dirt = 1;
+	//add created inode folder to parent folder.
 	bh = add_entry(dir,basename,namelen,&de);
 	if (!bh) {
 		iput(dir);
