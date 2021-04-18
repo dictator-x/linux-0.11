@@ -695,9 +695,11 @@ int sys_rmdir(const char * name)
 	}
 	if (inode->i_nlinks != 2)
 		printk("empty directory has nlink!=2 (%d)",inode->i_nlinks);
+	//clean data buffer.
 	de->inode = 0;
 	bh->b_dirt = 1;
 	brelse(bh);
+	//clean inode and parend inode.
 	inode->i_nlinks=0;
 	inode->i_dirt=1;
 	dir->i_nlinks--;
@@ -781,7 +783,9 @@ int sys_link(const char * oldname, const char * newname)
 		iput(oldinode);
 		return -EPERM;
 	}
+
 	dir = dir_namei(newname,&namelen,&basename);
+	//the path should be correct at least
 	if (!dir) {
 		iput(oldinode);
 		return -EACCES;
@@ -814,6 +818,7 @@ int sys_link(const char * oldname, const char * newname)
 		iput(oldinode);
 		return -ENOSPC;
 	}
+	//copy same data info to linking inode.
 	de->inode = oldinode->i_num;
 	bh->b_dirt = 1;
 	brelse(bh);
