@@ -46,6 +46,7 @@ static int rw_kmem(int rw,char * buf, int count, off_t * pos)
 	return -EIO;
 }
 
+// count: port number, pos: port position.
 static int rw_port(int rw,char * buf, int count, off_t * pos)
 {
 	int i=*pos;
@@ -82,6 +83,7 @@ static int rw_memory(int rw, unsigned minor, char * buf, int count, off_t * pos)
 
 #define NRDEVS ((sizeof (crw_table))/(sizeof (crw_ptr)))
 
+//file_operation.
 static crw_ptr crw_table[]={
 	NULL,		/* nodev */
 	rw_memory,	/* /dev/mem etc */

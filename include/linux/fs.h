@@ -113,9 +113,13 @@ struct m_inode {
 	unsigned char i_update;
 };
 
+//memory only.
+//file open.
+//fd?
 struct file {
 	unsigned short f_mode;
 	unsigned short f_flags;
+	//can use to approach kernel level file lock?
 	unsigned short f_count;
 	struct m_inode * f_inode;
 	off_t f_pos;

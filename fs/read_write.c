@@ -80,11 +80,12 @@ int sys_read(unsigned int fd,char * buf,int count)
 	return -EINVAL;
 }
 
+//This is how VFS statement work. big selection function.
 int sys_write(unsigned int fd,char * buf,int count)
 {
 	struct file * file;
 	struct m_inode * inode;
-	
+
 	if (fd>=NR_OPEN || count <0 || !(file=current->filp[fd]))
 		return -EINVAL;
 	if (!count)

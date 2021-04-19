@@ -64,7 +64,7 @@ int sys_access(const char * filename,int mode)
 	 * XXX we are doing this test last because we really should be
 	 * swapping the effective with the real user id (temporarily),
 	 * and then calling suser() routine.  If we do call the
-	 * suser() routine, it needs to be called last. 
+	 * suser() routine, it needs to be called last.
 	 */
 	if ((!current->uid) &&
 	    (!(mode & 1) || (i_mode & 0111)))
@@ -135,6 +135,7 @@ int sys_chown(const char * filename,int uid,int gid)
 	return 0;
 }
 
+//important
 int sys_open(const char * filename,int flag,int mode)
 {
 	struct m_inode * inode;
@@ -142,18 +143,22 @@ int sys_open(const char * filename,int flag,int mode)
 	int i,fd;
 
 	mode &= 0777 & ~current->umask;
+	//find available fd in current process
 	for(fd=0 ; fd<NR_OPEN ; fd++)
 		if (!current->filp[fd])
 			break;
 	if (fd>=NR_OPEN)
 		return -EINVAL;
+	//?
 	current->close_on_exec &= ~(1<<fd);
+	//find empty file object in global file_table.
 	f=0+file_table;
 	for (i=0 ; i<NR_FILE ; i++,f++)
 		if (!f->f_count) break;
 	if (i>=NR_FILE)
 		return -EINVAL;
 	(current->filp[fd]=f)->f_count++;
+
 	if ((i=open_namei(filename,flag,mode,&inode))<0) {
 		current->filp[fd]=NULL;
 		f->f_count=0;
@@ -191,7 +196,7 @@ int sys_creat(const char * pathname, int mode)
 }
 
 int sys_close(unsigned int fd)
-{	
+{
 	struct file * filp;
 
 	if (fd >= NR_OPEN)

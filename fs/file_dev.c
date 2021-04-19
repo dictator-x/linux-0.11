@@ -14,6 +14,7 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define MAX(a,b) (((a)>(b))?(a):(b))
 
+//buf and count come from user space.
 int file_read(struct m_inode * inode, struct file * filp, char * buf, int count)
 {
 	int left,chars,nr;
@@ -57,6 +58,7 @@ int file_write(struct m_inode * inode, struct file * filp, char * buf, int count
  * ok, append may not work when many processes are writing at the same time
  * but so what. That way leads to madness anyway.
  */
+	//where is the code that remove redundant data block?
 	if (filp->f_flags & O_APPEND)
 		pos = inode->i_size;
 	else
@@ -69,9 +71,11 @@ int file_write(struct m_inode * inode, struct file * filp, char * buf, int count
 		c = pos % BLOCK_SIZE;
 		p = c + bh->b_data;
 		bh->b_dirt = 1;
+		//remaining space of current block.
 		c = BLOCK_SIZE-c;
 		if (c > count-i) c = count-i;
 		pos += c;
+		//update file size.
 		if (pos > inode->i_size) {
 			inode->i_size = pos;
 			inode->i_dirt = 1;
