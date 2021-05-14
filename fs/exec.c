@@ -101,6 +101,19 @@ static int count(char ** argv)
  * it is expensive to load a segment register, we try to avoid calling
  * set_fs() unless we absolutely have to.
  */
+//argc: argument counter
+//argv: array of arguments
+//tss: cs ds es ss fs
+//cs: code segment
+//ds: data segment
+//es: extra segment
+//ss: stack segment
+//fs: user space data segment
+//ds vs fs: depends on which mode.
+//user mode => ds: user process data === fs: user process data
+//kernel mode => ds: kernel process data != fs: user process data
+//fs and ds can be used to communicate between user and kernel space.
+//initial p is 128K.
 static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 		unsigned long p, int from_kmem)
 {
@@ -110,16 +123,16 @@ static unsigned long copy_strings(int argc,char ** argv,unsigned long *page,
 
 	if (!p)
 		return 0;	/* bullet-proofing */
-	new_fs = get_ds();
-	old_fs = get_fs();
+	new_fs = get_ds();  //ds
+	old_fs = get_fs();  //fs: userspace ds(always)
 	if (from_kmem==2)
-		set_fs(new_fs);
+		set_fs(new_fs); //set ds to fs.
 	while (argc-- > 0) {
 		if (from_kmem == 1)
-			set_fs(new_fs);
+			set_fs(new_fs);  //go to kernel mode data to pick up argv*
 		if (!(tmp = (char *)get_fs_long(((unsigned long *)argv)+argc)))
 			panic("argc is wrong");
-		if (from_kmem == 1)
+		if (from_kmem == 1) //pair with set.
 			set_fs(old_fs);
 		len=0;		/* remember zero-padding */
 		do {
@@ -159,15 +172,18 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 
 	code_limit = text_size+PAGE_SIZE -1;
 	code_limit &= 0xFFFFF000;
-	data_limit = 0x4000000;
+	data_limit = 0x4000000;    //set logical address for process to 64M
+	//no need to change linear address. cause fork already created new one for each process.
 	code_base = get_base(current->ldt[1]);
 	data_base = code_base;
 	set_base(current->ldt[1],code_base);
 	set_limit(current->ldt[1],code_limit);
 	set_base(current->ldt[2],data_base);
 	set_limit(current->ldt[2],data_limit);
+
 /* make sure fs points to the NEW data segment */
 	__asm__("pushl $0x17\n\tpop %%fs"::);
+
 	data_base += data_limit;
 	for (i=MAX_ARG_PAGES-1 ; i>=0 ; i--) {
 		data_base -= PAGE_SIZE;
@@ -180,6 +196,8 @@ static unsigned long change_ldt(unsigned long text_size,unsigned long * page)
 /*
  * 'do_execve()' executes a new program.
  */
+//need to have process ready before this function.
+//important part is to assign eip to the start of new process.
 int do_execve(unsigned long * eip,long tmp,char * filename,
 	char ** argv, char ** envp)
 {
@@ -191,6 +209,7 @@ int do_execve(unsigned long * eip,long tmp,char * filename,
 	int e_uid, e_gid;
 	int retval;
 	int sh_bang = 0;
+	//will point to stack at end of the function.
 	unsigned long p=PAGE_SIZE*MAX_ARG_PAGES-4;
 
 	if ((0xffff & eip[1]) != 0x000f)
@@ -223,6 +242,7 @@ restart_interp:
 		retval = -EACCES;
 		goto exec_error2;
 	}
+	//code the data ensure unsafe edit.
 	ex = *((struct exec *) bh->b_data);	/* read exec-header */
 	if ((bh->b_data[0] == '#') && (bh->b_data[1] == '!') && (!sh_bang)) {
 		/*
@@ -233,6 +253,7 @@ restart_interp:
 		char buf[1023], *cp, *interp, *i_name, *i_arg;
 		unsigned long old_fs;
 
+		//eg: #!/bin/bash
 		strncpy(buf, bh->b_data+2, 1022);
 		brelse(bh);
 		iput(inode);
@@ -260,7 +281,10 @@ restart_interp:
 		 * (optional) argument.
 		 */
 		if (sh_bang++ == 0) {
+			//Will need to switch user DS, cause data is in user space.
+			//both envp* and envp** are in user mode.
 			p = copy_strings(envc, envp, page, p, 0);
+			//skip first one, first one is program name.
 			p = copy_strings(--argc, argv+1, page, p, 0);
 		}
 		/*
@@ -286,8 +310,11 @@ restart_interp:
 		/*
 		 * OK, now restart the process with the interpreter's inode.
 		 */
+		//why don't do this at first time we get inode in the beginning of this func?
+		//guess: only kernel can success interp node?
 		old_fs = get_fs();
 		set_fs(get_ds());
+		//running namei() calling get_fs_..., so we have to set fs to kernel
 		if (!(inode=namei(interp))) { /* get executables inode */
 			set_fs(old_fs);
 			retval = -ENOENT;
@@ -297,6 +324,7 @@ restart_interp:
 		goto restart_interp;
 	}
 	brelse(bh);
+	//check if exec file has right format.
 	if (N_MAGIC(ex) != ZMAGIC || ex.a_trsize || ex.a_drsize ||
 		ex.a_text+ex.a_data+ex.a_bss>0x3000000 ||
 		inode->i_size < ex.a_text+ex.a_data+ex.a_syms+N_TXTOFF(ex)) {
@@ -317,22 +345,30 @@ restart_interp:
 		}
 	}
 /* OK, This is the point of no return */
+	//copy new code for the process.
 	if (current->executable)
 		iput(current->executable);
 	current->executable = inode;
+	//clear single handler.
 	for (i=0 ; i<32 ; i++)
 		current->sigaction[i].sa_handler = NULL;
+	//clear file descriptor.
 	for (i=0 ; i<NR_OPEN ; i++)
 		if ((current->close_on_exec>>i)&1)
 			sys_close(i);
 	current->close_on_exec = 0;
+	//clear data and code segment fot the current process.
+	//gonna replace with new code.
 	free_page_tables(get_base(current->ldt[1]),get_limit(0x0f));
 	free_page_tables(get_base(current->ldt[2]),get_limit(0x17));
 	if (last_task_used_math == current)
 		last_task_used_math = NULL;
 	current->used_math = 0;
+
+	//create new ldt for the new code	
 	p += change_ldt(ex.a_text,page)-MAX_ARG_PAGES*PAGE_SIZE;
 	p = (unsigned long) create_tables((char *)p,argc,envc);
+
 	current->brk = ex.a_bss +
 		(current->end_data = ex.a_data +
 		(current->end_code = ex.a_text));
@@ -342,6 +378,7 @@ restart_interp:
 	i = ex.a_text+ex.a_data;
 	while (i&0xfff)
 		put_fs_byte(0,(char *) (i++));
+	//important point.
 	eip[0] = ex.a_entry;		/* eip, magic happens :-) */
 	eip[3] = p;			/* stack pointer */
 	return 0;
